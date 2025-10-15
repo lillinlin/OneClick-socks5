@@ -122,38 +122,3 @@ EOF
 fi
 
 panel
-# 管理面板
-management_panel(){
-while true; do
-    echo "================ Xray SOCKS5 管理面板 ================"
-    echo "1. 查看状态"
-    echo "2. 查看用户名密码"
-    echo "3. 停止服务"
-    echo "4. 启动服务"
-    echo "5. 卸载服务"
-    echo "6. 退出"
-    read -rp "请选择操作: " choice
-    case $choice in
-        1) systemctl status xray-socks5 ;;
-        2) echo "用户名: $USERNAME"; echo "密码: $PASSWORD" ;;
-        3) systemctl stop xray-socks5 ;;
-        4) systemctl start xray-socks5 ;;
-        5) 
-            systemctl stop xray-socks5
-            systemctl disable xray-socks5
-            rm -f $SERVICE_FILE /etc/xray-socks5.json
-            echo "已卸载 Xray SOCKS5"
-            exit
-            ;;
-        6) exit ;;
-        *) echo "无效选择" ;;
-    esac
-done
-}
-
-# 执行安装
-install_xray
-create_config
-create_service
-echo "Xray SOCKS5 已安装完成"
-management_panel
