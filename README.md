@@ -1,4 +1,3 @@
-# OneClick-socks5
 一键安装 SOCKS5 服务管理面板，简单易用
 
 ## 特性
