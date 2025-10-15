@@ -153,15 +153,15 @@ function check_status() {
     LATEST=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | jq -r '.tag_name')
     LOCAL_VER=$(echo $VERSION | awk '{print $2}')
     if [[ -n "$LATEST" && "$LATEST" != "$LOCAL_VER" ]]; then
-        UPDATE_STATUS="有 ($LATEST)"
+        UPDATE_STATUS="($LATEST)"
     else
-        UPDATE_STATUS="无"
+        UPDATE_STATUS="($LATEST)"
     fi
 
     echo "================ Xray SOCKS5 管理面板 ================"
     echo "服务状态      : $STATUS"
     echo "核心版本      : $VERSION"
-    echo "是否有新版本  : $UPDATE_STATUS"
+    echo "Xray最新版本  : $UPDATE_STATUS"
     echo "监听端口      : $PORT"
     echo "用户名        : $USERNAME"
     echo "密码          : $PASSWORD"
