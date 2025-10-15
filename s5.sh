@@ -1,124 +1,167 @@
 #!/bin/bash
-# 文件名: /usr/local/bin/s5
-# 运行: s5
-# 功能: Xray SOCKS5 管理面板
+set -e
 
-SERVICE="xray-socks5"
-SERVICE_FILE="/etc/systemd/system/xray-socks5.service"
-CONFIG_FILE="/etc/xray-socks5.json"
-XRAY_BIN="/usr/local/bin/xray"
+# ============================================
+# Xray SOCKS5 一体化安装与管理脚本 by lillinlin
+# ============================================
 
-# 获取用户名密码
-get_credentials(){
-    if [[ -f $CONFIG_FILE ]]; then
-        USERNAME=$(jq -r '.inbounds[0].settings.accounts[0].user' $CONFIG_FILE)
-        PASSWORD=$(jq -r '.inbounds[0].settings.accounts[0].pass' $CONFIG_FILE)
+# 自动检测 root 权限
+if [ "$(id -u)" -ne 0 ]; then
+    if command -v sudo >/dev/null 2>&1; then
+        exec sudo "$0" "$@"
     else
-        USERNAME="未生成"
-        PASSWORD="未生成"
+        echo "错误: 当前用户不是 root 且系统未安装 sudo，请使用 root 用户执行。"
+        exit 1
     fi
-}
-
-# 获取 Xray 版本
-get_xray_version(){
-    if [[ -f $XRAY_BIN ]]; then
-        XRAY_VERSION=$($XRAY_BIN version 2>/dev/null | head -n1)
-    else
-        XRAY_VERSION="未安装"
-    fi
-}
-
-# 面板
-panel(){
-    while true; do
-        clear
-        echo "================ Xray SOCKS5 管理面板 ================"
-        get_credentials
-        get_xray_version
-        STATUS=$(systemctl is-active $SERVICE)
-        echo "服务状态 : $STATUS"
-        echo "核心版本 : $XRAY_VERSION"
-        echo "用户名   : $USERNAME"
-        echo "密码     : $PASSWORD"
-        echo "-------------------------------------------------------"
-        echo "1. 启动服务"
-        echo "2. 停止服务"
-        echo "3. 卸载服务"
-        echo "4. 更新核心"
-        echo "5. 退出面板"
-        read -rp "请选择操作: " choice
-        case $choice in
-            1) systemctl start $SERVICE ;;
-            2) systemctl stop $SERVICE ;;
-            3) 
-                systemctl stop $SERVICE
-                systemctl disable $SERVICE
-                rm -f $SERVICE_FILE $CONFIG_FILE
-                echo "已卸载 Xray SOCKS5"
-                exit
-                ;;
-            4)
-                echo "正在更新 Xray 核心..."
-                bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
-                echo "更新完成，重启服务"
-                systemctl restart $SERVICE
-                sleep 2
-                ;;
-            5) exit ;;
-            *) echo "无效选择" ;;
-        esac
-        read -rp "按回车继续..." 
-    done
-}
-
-# 初始化
-if [[ ! -f $XRAY_BIN ]]; then
-    echo "Xray 未安装，正在安装..."
-    bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
 fi
 
-if [[ ! -f $CONFIG_FILE ]]; then
-    echo "未检测到 SOCKS5 配置，正在生成..."
-    USERNAME="user$(date +%s%N | sha256sum | head -c 6)"
-    PASSWORD=$(date +%s%N | sha256sum | head -c 12)
-    cat > $CONFIG_FILE <<EOF
+# Xray 安装路径
+XRAY_DIR="/usr/local/xray"
+CONF_FILE="/etc/xray/config.json"
+SERVICE_FILE="/etc/systemd/system/xray-socks5.service"
+
+function install_s5() {
+    echo "================ Xray SOCKS5 安装程序 ================"
+
+    # 自动检测包管理器
+    if command -v apt >/dev/null 2>&1; then
+        PKG="apt"
+    elif command -v yum >/dev/null 2>&1; then
+        PKG="yum"
+    elif command -v dnf >/dev/null 2>&1; then
+        PKG="dnf"
+    else
+        echo "不支持的系统，请使用 Debian/Ubuntu/CentOS 等常见发行版。"
+        exit 1
+    fi
+
+    echo "正在安装依赖..."
+    $PKG update -y >/dev/null 2>&1 || true
+    $PKG install -y curl wget jq unzip >/dev/null 2>&1 || true
+
+    read -p "请输入监听端口（默认随机）: " PORT
+    read -p "请输入用户名（默认123）: " USER
+    read -p "请输入密码（默认123）: " PASS
+
+    [ -z "$PORT" ] && PORT=$((RANDOM % 20000 + 10000))
+    [ -z "$USER" ] && USER="123"
+    [ -z "$PASS" ] && PASS="123"
+
+    echo "-------------------------------------------------------"
+    echo "端口: $PORT"
+    echo "用户名: $USER"
+    echo "密码: $PASS"
+    echo "-------------------------------------------------------"
+
+    mkdir -p /etc/xray /usr/local/xray
+
+    echo "正在下载最新 Xray 核心..."
+    LATEST_URL=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | jq -r '.assets[] | select(.name | test("linux-64.zip$")) | .browser_download_url')
+    wget -qO /usr/local/xray/xray.zip "$LATEST_URL"
+    unzip -o /usr/local/xray/xray.zip -d /usr/local/xray >/dev/null
+    chmod +x /usr/local/xray/xray
+    rm -f /usr/local/xray/xray.zip
+
+    cat >"$CONF_FILE" <<EOF
 {
+  "log": { "loglevel": "warning" },
   "inbounds": [{
-    "port": 1080,
+    "port": $PORT,
     "protocol": "socks",
     "settings": {
       "auth": "password",
-      "accounts": [
-        {
-          "user": "$USERNAME",
-          "pass": "$PASSWORD"
-        }
-      ]
+      "accounts": [{ "user": "$USER", "pass": "$PASS" }],
+      "udp": true,
+      "ip": "127.0.0.1"
     }
   }],
-  "outbounds": [{
-    "protocol": "freedom"
-  }]
+  "outbounds": [{ "protocol": "freedom" }]
 }
 EOF
-fi
 
-# 创建 systemd 服务
-if [[ ! -f $SERVICE_FILE ]]; then
-    cat > $SERVICE_FILE <<EOF
+    cat >"$SERVICE_FILE" <<EOF
 [Unit]
 Description=Xray SOCKS5 Service
 After=network.target
 
 [Service]
-ExecStart=$XRAY_BIN -config $CONFIG_FILE
+ExecStart=$XRAY_DIR/xray -config $CONF_FILE
 Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
 EOF
-    systemctl daemon-reload
-    systemctl enable --now $SERVICE
-fi
 
-panel
+    systemctl daemon-reload
+    systemctl enable --now xray-socks5 >/dev/null 2>&1
+
+    ln -sf "$(realpath "$0")" /usr/local/bin/s5
+    chmod +x /usr/local/bin/s5
+
+    echo "================ 安装完成 ================"
+    echo "SOCKS5 服务已启动"
+    echo "端口: $PORT"
+    echo "用户名: $USER"
+    echo "密码: $PASS"
+    echo "使用命令 's5' 可打开管理面板"
+    echo "=========================================="
+}
+
+function uninstall_s5() {
+    echo "正在卸载..."
+    systemctl disable --now xray-socks5 >/dev/null 2>&1 || true
+    rm -f "$SERVICE_FILE"
+    rm -rf "$XRAY_DIR" /etc/xray
+    rm -f /usr/local/bin/s5
+    systemctl daemon-reload
+    echo "卸载完成。"
+}
+
+function update_core() {
+    echo "正在更新 Xray 核心..."
+    LATEST_URL=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | jq -r '.assets[] | select(.name | test("linux-64.zip$")) | .browser_download_url')
+    wget -qO /usr/local/xray/xray.zip "$LATEST_URL"
+    unzip -o /usr/local/xray/xray.zip -d /usr/local/xray >/dev/null
+    chmod +x /usr/local/xray/xray
+    rm -f /usr/local/xray/xray.zip
+    systemctl restart xray-socks5
+    echo "核心已更新。"
+}
+
+function check_status() {
+    local STATUS=$(systemctl is-active xray-socks5 || echo "inactive")
+    local VERSION=$($XRAY_DIR/xray version 2>/dev/null | head -n 1 || echo "未知")
+    local USERNAME=$(jq -r '.inbounds[0].settings.accounts[0].user' $CONF_FILE 2>/dev/null || echo "-")
+    local PASSWORD=$(jq -r '.inbounds[0].settings.accounts[0].pass' $CONF_FILE 2>/dev/null || echo "-")
+    local PORT=$(jq -r '.inbounds[0].port' $CONF_FILE 2>/dev/null || echo "-")
+
+    echo "================ Xray SOCKS5 管理面板 ================"
+    echo "服务状态 : $STATUS"
+    echo "核心版本 : $VERSION"
+    echo "监听端口 : $PORT"
+    echo "用户名   : $USERNAME"
+    echo "密码     : $PASSWORD"
+    echo "-------------------------------------------------------"
+    echo "1. 启动服务"
+    echo "2. 停止服务"
+    echo "3. 卸载服务"
+    echo "4. 更新核心"
+    echo "5. 退出面板"
+    echo "-------------------------------------------------------"
+    read -p "请选择操作: " CHOICE
+
+    case "$CHOICE" in
+        1) systemctl start xray-socks5 && echo "已启动";;
+        2) systemctl stop xray-socks5 && echo "已停止";;
+        3) uninstall_s5;;
+        4) update_core;;
+        *) echo "已退出。"; exit 0;;
+    esac
+}
+
+# 如果尚未安装，则执行安装流程
+if [ ! -f "$SERVICE_FILE" ]; then
+    install_s5
+else
+    check_status
+fi
