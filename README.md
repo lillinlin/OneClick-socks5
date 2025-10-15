@@ -14,3 +14,5 @@
 
 ```bash
 wget -O s5.sh https://raw.githubusercontent.com/lillinlin/OneClick-socks5/main/s5.sh && chmod +x s5.sh && ./s5.sh
+
+![1](./i.png)  
