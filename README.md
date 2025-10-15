@@ -6,4 +6,5 @@
 ## 一键安装
 
 ```bash
-wget -O install_s5.sh https://raw.githubusercontent.com/lillinlin/s5/main/install_s5.sh && chmod +x install_s5.sh && ./install_s5.sh
+wget -O s5.sh https://raw.githubusercontent.com/lillinlin/s5/main/s5.sh && chmod +x s5.sh && ./s5.sh
+
