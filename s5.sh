@@ -1,13 +1,10 @@
 #!/bin/bash
 
 # =================================================================
-# SOCKS5 (Dante) - All-in-One Self-Installing Script
+# SOCKS5 (Dante) - All-in-One Self-Installing Script (v2 - with Source Fix)
 #
-# How it works:
-# 1. You paste this entire block into your shell and run it.
-# 2. It detects it's the first run, starts the installation.
-# 3. During installation, it copies ITS OWN SOURCE CODE to /usr/local/bin/s5.
-# 4. After that, running 's5' will launch the management panel.
+# Changelog v2:
+# - Added intelligent source list checker and fixer for Debian systems.
 #
 # Author: Gemini
 # =================================================================
@@ -17,20 +14,18 @@ INSTALL_PATH="/usr/local/bin/s5"
 CONFIG_FILE="/etc/danted.conf"
 LOG_FILE="/var/log/danted.log"
 SERVICE_NAME="danted"
-CONFIG_CACHE="/etc/s5_config" # File to store user/pass/port info
+CONFIG_CACHE="/etc/s5_config"
 
 # --- Style Definitions ---
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
-NC='\033[0;m' # No Color
+NC='\033[0;m'
 
 # ================================================================
 #                       CORE FUNCTIONS
 # ================================================================
-
-# Function to display the logo
 show_logo() {
     echo -e "${BLUE}"
     echo "    ╔════════════════════════════════════════════════╗"
@@ -41,7 +36,6 @@ show_logo() {
     echo -e "${NC}"
 }
 
-# Check for root privileges
 check_root() {
     if [[ "$(id -u)" -ne 0 ]]; then
         echo -e "${RED}错误：此脚本必须以 root 权限运行！请使用 sudo 或切换到 root 用户。${NC}"
@@ -49,7 +43,43 @@ check_root() {
     fi
 }
 
-# Install necessary packages
+# NEW: Function to check and fix Debian sources.list
+check_and_fix_sources() {
+    if [ -f /etc/debian_version ]; then
+        # Check if dante-server is available
+        apt-get update >/dev/null
+        if ! apt-cache pkgnames | grep -q "^dante-server$"; then
+            echo -e "${YELLOW}警告：在您的 Debian 系统中找不到 'dante-server' 软件包。${NC}"
+            echo "这很可能是因为软件源配置不完整。"
+            read -rp "您想让脚本自动尝试修复 '/etc/apt/sources.list' 吗？ (y/n): " choice
+            if [[ "$choice" =~ ^[yY]$ ]]; then
+                echo -e "${YELLOW}▶ 正在备份并更新软件源...${NC}"
+                
+                DEBIAN_VERSION_CODENAME=$(cat /etc/os-release | grep "VERSION_CODENAME" | cut -d'=' -f2)
+                
+                cp /etc/apt/sources.list /etc/apt/sources.list.bak.$(date +%s)
+                tee /etc/apt/sources.list > /dev/null <<EOF
+deb http://deb.debian.org/debian/ ${DEBIAN_VERSION_CODENAME} main contrib non-free non-free-firmware
+deb-src http://deb.debian.org/debian/ ${DEBIAN_VERSION_CODENAME} main contrib non-free non-free-firmware
+
+deb http://security.debian.org/debian-security ${DEBIAN_VERSION_CODENAME}-security main contrib non-free non-free-firmware
+deb-src http://security.debian.org/debian-security ${DEBIAN_VERSION_CODENAME}-security main contrib non-free non-free-firmware
+
+deb http://deb.debian.org/debian/ ${DEBIAN_VERSION_CODENAME}-updates main contrib non-free non-free-firmware
+deb-src http://deb.debian.org/debian/ ${DEBIAN_VERSION_CODENAME}-updates main contrib non-free non-free-firmware
+EOF
+                echo -e "${GREEN}✔ 软件源已更新为官方源。${NC}"
+                echo -e "${YELLOW}▶ 正在刷新软件包列表...${NC}"
+                apt-get update
+            else
+                echo -e "${RED}操作已取消。安装无法继续。${NC}"
+                exit 1
+            fi
+        fi
+    fi
+}
+
+
 install_packages() {
     echo -e "${YELLOW}▶ 正在更新软件包列表...${NC}"
     if command -v apt-get &>/dev/null; then
@@ -69,7 +99,7 @@ install_packages() {
     fi
 
     if ! command -v danted &>/dev/null; then
-        echo -e "${RED}错误：Dante Server 安装失败，请检查您的系统软件源。${NC}"
+        echo -e "${RED}错误：Dante Server 安装失败，请再次检查您的系统软件源。${NC}"
         exit 1
     fi
     echo -e "${GREEN}✔ Dante Server 安装成功。${NC}"
@@ -80,7 +110,6 @@ install_packages() {
 #                     MANAGEMENT FUNCTIONS
 # ================================================================
 
-# Installation process
 do_install() {
     check_root
     
@@ -91,14 +120,15 @@ do_install() {
 
     clear
     show_logo
-    echo "--- 欢迎使用 SOCKS5 全自动安装向导 ---"
+    echo "--- 欢迎使用 SOCKS5 全自动安装向导 (智能修复版) ---"
+    
+    # Run the new check function first
+    check_and_fix_sources
     
     read -rp "请输入代理端口 [默认: 65000]: " PORT
     PORT=${PORT:-"65000"}
-    
     read -rp "请输入代理用户名 [默认: 123123]: " USERNAME
     USERNAME=${USERNAME:-"123123"}
-
     read -rp "请输入代理密码 [留空则自动生成12位强密码]: " PASSWORD
     if [ -z "$PASSWORD" ]; then
         PASSWORD=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 12 | head -n 1)
@@ -118,9 +148,7 @@ do_install() {
         echo -e "${RED}错误：无法检测到主网络接口。${NC}"
         exit 1
     fi
-
     [ -f "$CONFIG_FILE" ] && mv "$CONFIG_FILE" "${CONFIG_FILE}.bak.$(date +%s)"
-
     cat > "$CONFIG_FILE" <<EOF
 logoutput: $LOG_FILE
 internal: 0.0.0.0 port = $PORT
@@ -140,7 +168,6 @@ EOF
     do_start
 
     echo -e "${YELLOW}▶ 正在将此脚本安装为 's5' 命令...${NC}"
-    # The magic happens here: the script copies itself to the install path
     cat > "$INSTALL_PATH" < "$0"
     chmod +x "$INSTALL_PATH"
     echo -e "${GREEN}✔ 's5' 命令已安装成功！${NC}"
@@ -158,56 +185,36 @@ EOF
     echo ""
 }
 
-# Uninstall process
 do_uninstall() {
     check_root
     read -rp "$(echo -e ${RED}警告：这将彻底卸载 Dante Server 并删除 's5' 命令！${NC}) 您确定吗？ [y/N]: " confirmation
-    if [[ ! "$confirmation" =~ ^[yY]([eE][sS])?$ ]]; then
-        echo "操作已取消。"
-        exit 0
-    fi
-    
+    if [[ ! "$confirmation" =~ ^[yY]([eE][sS])?$ ]]; then echo "操作已取消。"; exit 0; fi
     do_stop
     systemctl disable ${SERVICE_NAME} &>/dev/null || true
-
     echo -e "${YELLOW}▶ 正在卸载 Dante Server 软件包...${NC}"
-    if command -v apt-get &>/dev/null; then
-        apt-get purge -y dante-server &>/dev/null
-    elif command -v dnf &>/dev/null || command -v yum &>/dev/null; then
-        yum remove -y dante-server &>/dev/null || dnf remove -y dante-server &>/dev/null
-    fi
-
+    if command -v apt-get &>/dev/null; then apt-get purge -y dante-server &>/dev/null;
+    elif command -v dnf &>/dev/null || command -v yum &>/dev/null; then yum remove -y dante-server &>/dev/null || dnf remove -y dante-server &>/dev/null; fi
     echo -e "${YELLOW}▶ 正在清理配置文件和用户...${NC}"
-    USERNAME_TO_DEL=$(grep USERNAME $CONFIG_CACHE | cut -d'=' -f2)
+    USERNAME_TO_DEL=$(grep USERNAME $CONFIG_CACHE 2>/dev/null | cut -d'=' -f2)
     rm -f "$CONFIG_FILE" "$LOG_FILE" "$CONFIG_CACHE"
     [ -n "$USERNAME_TO_DEL" ] && userdel "$USERNAME_TO_DEL" &>/dev/null
-
     echo -e "${YELLOW}▶ 正在删除 's5' 命令...${NC}"
     rm -f "$INSTALL_PATH"
-    
     echo -e "${GREEN}✅ 卸载完成。${NC}"
 }
 
-# Service actions
 do_start() { systemctl restart ${SERVICE_NAME}; systemctl enable ${SERVICE_NAME} &>/dev/null; }
 do_stop() { systemctl stop ${SERVICE_NAME}; }
 do_restart() { systemctl restart ${SERVICE_NAME}; }
 view_logs() { echo -e "${YELLOW}--- 按 Ctrl+C 退出日志查看 ---${NC}"; sleep 1; tail -n 50 -f ${LOG_FILE}; }
 
-# --- Interactive Panel ---
 get_status_info() {
-    if ! command -v danted &>/dev/null; then
-        STATUS_MSG="${RED}未安装${NC}"; return;
-    fi
-    
+    if ! command -v danted &>/dev/null; then STATUS_MSG="${RED}未安装${NC}"; return; fi
     if systemctl is-active --quiet ${SERVICE_NAME}; then
         STATUS_MSG="${GREEN}运行中${NC}"
         PID=$(systemctl show ${SERVICE_NAME} --property=MainPID --value)
         STATUS_MSG+=" (PID: ${YELLOW}${PID}${NC})"
-    else
-        STATUS_MSG="${RED}已停止${NC}"
-    fi
-
+    else STATUS_MSG="${RED}已停止${NC}"; fi
     if [ -f $CONFIG_CACHE ]; then
         source $CONFIG_CACHE
         IP=$(hostname -I | awk '{print $1}')
@@ -215,24 +222,16 @@ get_status_info() {
     fi
 }
 
-# Main menu loop
 show_menu() {
     check_root
     while true; do
-        clear
-        show_logo
-        get_status_info
-        
-        echo "  当前状态: ${STATUS_MSG}"
-        echo -e "${CONFIG_INFO}"
+        clear; show_logo; get_status_info
+        echo "  当前状态: ${STATUS_MSG}"; echo -e "${CONFIG_INFO}"
         echo "--------------------------------------------------"
         echo "  1. 启动服务         2. 停止服务         3. 重启服务"
-        echo "  4. 查看日志"
-        echo -e "  ${RED}5. 卸载服务${NC}"
-        echo "  0. 退出脚本"
+        echo "  4. 查看日志"; echo -e "  ${RED}5. 卸载服务${NC}"; echo "  0. 退出脚本"
         echo "--------------------------------------------------"
         read -rp "请输入数字 [0-5]: " choice
-
         case $choice in
             1) do_start; echo -e "${GREEN}✔ 服务已启动${NC}"; sleep 1 ;;
             2) do_stop; echo -e "${GREEN}✔ 服务已停止${NC}"; sleep 1 ;;
@@ -240,7 +239,7 @@ show_menu() {
             4) view_logs ;;
             5) do_uninstall; break ;;
             0) break ;;
-            *) echo -e "${RED}无效输入，请重试。${NC}"; sleep 1 ;;
+            *) echo -e "${RED}无效输入...${NC}"; sleep 1 ;;
         esac
     done
 }
@@ -249,15 +248,9 @@ show_menu() {
 # ================================================================
 #                       SCRIPT ENTRY POINT
 # ================================================================
-
-# This logic decides whether to run the installer or the menu.
-# It checks if the s5 command exists.
 if [ ! -f "$INSTALL_PATH" ]; then
-    # If /usr/local/bin/s5 does not exist, it means this is the FIRST run.
-    # So, we run the installer.
     do_install
 else
-    # If the file exists, it means the script is already installed.
-    # So, we show the management panel.
     show_menu
 fi
+
