@@ -29,11 +29,33 @@ install_singbox() {
         echo -e "${RED}错误：'wget' 或 'curl' 命令未找到，无法继续安装。${NC}"; exit 1;
     fi
 
-    echo -e "${YELLOW}▶ 正在使用官方脚本安装/更新 Sing-box 核心...${NC}"
-    bash -c "$(wget -qO- https://raw.githubusercontent.com/SagerNet/sing-box/master/install.sh || curl -fsSL https://raw.githubusercontent.com/SagerNet/sing-box/master/install.sh)" install
+    echo -e "${YELLOW}▶ 正在下载并安装 Sing-box 核心二进制文件...${NC}"
     
+    BIN_PATH="/usr/local/bin/sing-box"
+    ARCH=$(uname -m)
+    OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+
+    # 处理常见架构名
+    case "$ARCH" in
+        x86_64) ARCH="amd64" ;;
+        aarch64|arm64) ARCH="arm64" ;;
+        *) echo -e "${RED}不支持的CPU架构: $ARCH${NC}"; exit 1 ;;
+    esac
+
+    DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-${OS}-${ARCH}"
+
+    # 下载
+    if ! wget -O "$BIN_PATH" "$DOWNLOAD_URL" --timeout=10 -q; then
+        echo -e "${RED}wget 下载失败，尝试使用 curl...${NC}"
+        if ! curl -fSL "$DOWNLOAD_URL" -o "$BIN_PATH"; then
+            echo -e "${RED}错误：下载 Sing-box 核心失败，请检查网络或官方仓库。${NC}"; exit 1;
+        fi
+    fi
+
+    chmod +x "$BIN_PATH"
+
     if ! command -v sing-box &>/dev/null; then
-        echo -e "${RED}错误：Sing-box 核心安装失败。请检查您的网络连接或官方脚本是否可用。${NC}"; exit 1;
+        echo -e "${RED}错误：Sing-box 核心安装失败。${NC}"; exit 1;
     fi
     echo -e "${GREEN}✔ Sing-box 核心安装成功！${NC}"
 }
@@ -46,7 +68,7 @@ do_install() {
     fi
 
     clear
-    echo -e "${BLUE}--- 欢迎使用 Sing-box SOCKS5 终极安装向导 (v2.1) ---${NC}"
+    echo -e "${BLUE}--- 欢迎使用 Sing-box SOCKS5 终极安装向导 (v2.2) ---${NC}"
     
     read -rp "请输入代理端口 [默认: 65000]: " PORT; PORT=${PORT:-"65000"}
     read -rp "请输入代理用户名 [默认: 123123]: " USERNAME; USERNAME=${USERNAME:-"123123"}
@@ -69,7 +91,9 @@ do_install() {
 EOF
     echo -e "${GREEN}✔ 配置文件创建成功。${NC}"
 
-    echo "PORT=${PORT}" > $CONFIG_CACHE; echo "USERNAME=${USERNAME}" >> $CONFIG_CACHE; echo "PASSWORD=${PASSWORD}" >> $CONFIG_CACHE
+    echo "PORT=${PORT}" > $CONFIG_CACHE
+    echo "USERNAME=${USERNAME}" >> $CONFIG_CACHE
+    echo "PASSWORD=${PASSWORD}" >> $CONFIG_CACHE
     
     do_start
     
@@ -95,8 +119,7 @@ do_uninstall() {
     read -rp "$(echo -e ${RED}警告：这将卸载 Sing-box 核心并删除所有相关文件！${NC}) 您确定吗？ [y/N]: " confirmation
     if [[ ! "$confirmation" =~ ^[yY]$ ]]; then echo "操作已取消。"; exit 0; fi
     
-    bash -c "$(wget -qO- https://raw.githubusercontent.com/SagerNet/sing-box/master/install.sh || curl -fsSL https://raw.githubusercontent.com/SagerNet/sing-box/master/install.sh)" uninstall
-    rm -rf "$CONFIG_DIR" "$CONFIG_CACHE" "$CMD_PATH" "$OLD_CMD_PATH"
+    rm -rf "$CONFIG_DIR" "$CONFIG_CACHE" "$CMD_PATH" "$OLD_CMD_PATH" "$SINGBOX_PATH"
     echo -e "${GREEN}✅ Sing-box 及相关组件卸载完成。${NC}"
 }
 
@@ -107,36 +130,40 @@ do_update() {
     do_restart
 }
 
-do_start() { systemctl restart ${SERVICE_NAME}; systemctl enable ${SERVICE_NAME} &>/dev/null; }
-do_stop() { systemctl stop ${SERVICE_NAME}; }
-do_restart() { systemctl restart ${SERVICE_NAME}; }
+do_start() { systemctl restart ${SERVICE_NAME} 2>/dev/null; systemctl enable ${SERVICE_NAME} &>/dev/null; }
+do_stop() { systemctl stop ${SERVICE_NAME} 2>/dev/null; }
+do_restart() { systemctl restart ${SERVICE_NAME} 2>/dev/null; }
 view_logs() { journalctl -u ${SERVICE_NAME} -f --no-pager; }
 
 get_status_info() {
-    if ! command -v sing-box &>/dev/null; then STATUS_MSG="${RED}未安装${NC}"; return; fi
-    CURRENT_VERSION=$($SINGBOX_PATH version | head -n 1 | awk '{print $2}')
-    LATEST_VERSION_JSON=$(curl -s --connect-timeout 2 "https://api.github.com/repos/SagerNet/sing-box/releases/latest")
-    LATEST_VERSION=$(echo "$LATEST_VERSION_JSON" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
-    UPDATE_INFO=""
-    if [[ -n "$LATEST_VERSION" && "$CURRENT_VERSION" != "$LATEST_VERSION" ]]; then
-        UPDATE_INFO="${GREEN}(可更新至: ${LATEST_VERSION})${NC}"
-    fi
-    if systemctl is-active --quiet ${SERVICE_NAME}; then
-        STATUS_MSG="${GREEN}运行中${NC}"; PID=$(systemctl show ${SERVICE_NAME} --property=MainPID --value); STATUS_MSG+=" (PID: ${YELLOW}${PID}${NC})"
-    else STATUS_MSG="${RED}已停止${NC}"; fi
-    if [ -f $CONFIG_CACHE ]; then
-        source $CONFIG_CACHE
-        IP=$(hostname -I | awk '{print $1}')
-        CONFIG_INFO="  ${BLUE}IP:${YELLOW} ${IP}  ${BLUE}端口:${YELLOW} ${PORT}  ${BLUE}用户:${YELLOW} ${USERNAME}${NC}"
+    STATUS_MSG="${RED}未安装${NC}"; CONFIG_INFO=""
+    if command -v sing-box &>/dev/null; then
+        CURRENT_VERSION=$($SINGBOX_PATH version | head -n 1 | awk '{print $2}')
+        LATEST_VERSION_JSON=$(curl -s --connect-timeout 2 "https://api.github.com/repos/SagerNet/sing-box/releases/latest")
+        LATEST_VERSION=$(echo "$LATEST_VERSION_JSON" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
+        UPDATE_INFO=""
+        if [[ -n "$LATEST_VERSION" && "$CURRENT_VERSION" != "$LATEST_VERSION" ]]; then
+            UPDATE_INFO="${GREEN}(可更新至: ${LATEST_VERSION})${NC}"
+        fi
+        if systemctl is-active --quiet ${SERVICE_NAME}; then
+            STATUS_MSG="${GREEN}运行中${NC}"; PID=$(systemctl show ${SERVICE_NAME} --property=MainPID --value); STATUS_MSG+=" (PID: ${YELLOW}${PID}${NC})"
+        else STATUS_MSG="${RED}已停止${NC}"; fi
+        if [ -f $CONFIG_CACHE ]; then
+            source $CONFIG_CACHE
+            IP=$(hostname -I | awk '{print $1}')
+            CONFIG_INFO="  ${BLUE}IP:${YELLOW} ${IP}  ${BLUE}端口:${YELLOW} ${PORT}  ${BLUE}用户:${YELLOW} ${USERNAME}${NC}"
+        fi
     fi
 }
 
 show_menu() {
     check_root
     while true; do
-        clear; echo -e "${BLUE}    ╔════════════════════════════════════════════════╗\n    ║     Sing-box SOCKS5 Server Management Panel      ║\n    ╚════════════════════════════════════════════════╝${NC}"; get_status_info
+        clear
+        echo -e "${BLUE}    ╔════════════════════════════════════════════════╗\n    ║     Sing-box SOCKS5 Server Management Panel      ║\n    ╚════════════════════════════════════════════════╝${NC}"
+        get_status_info
         echo -e "\n  当前状态: ${STATUS_MSG}"
-        echo -e "  核心版本: ${YELLOW}${CURRENT_VERSION}${NC} ${UPDATE_INFO}"
+        echo -e "  核心版本: ${YELLOW}${CURRENT_VERSION:-未知}${NC} ${UPDATE_INFO}"
         echo -e "${CONFIG_INFO}"
         echo "--------------------------------------------------"
         echo "  1. 启动服务         2. 停止服务         3. 重启服务"
@@ -159,8 +186,6 @@ show_menu() {
 }
 
 # --- Script Entry Point ---
-# If the script is run as 's5' (or the old 'sb-s5'), show the menu.
-# Otherwise, run the installer.
 if [[ "$(readlink -f "$0")" == "$CMD_PATH" || "$(readlink -f "$0")" == "$OLD_CMD_PATH" ]]; then
     show_menu
 else
