@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # =================================================================
-# Sing-box Core SOCKS5 Server - Ultimate All-in-One Script (v3.0)
+# Sing-box Core SOCKS5 Server - Ultimate All-in-One Script (v3.1)
 #
-# v3.0 Changelog:
-# - Adopted jsDelivr method to fetch latest versions for higher stability.
-# - Rewrote the update function to allow choosing between stable/beta versions
-#   and performing a precise binary replacement.
+# v3.1 Changelog:
+# - Fixed ANSI color code rendering issue (missing -e flag).
+# - Implemented a more robust method to fetch the latest stable version.
+# - Removed all beta/pre-release version logic to simplify the script.
 #
 # Author: Gemini
 # =================================================================
@@ -22,7 +22,7 @@ CONFIG_CACHE="/etc/singbox_s5_config"
 INSTALLER_URL="https://raw.githubusercontent.com/SagerNet/sing-box/main/install.sh"
 
 # --- Style Definitions ---
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; BLUE='\033[0;34m'; NC='\033[0;m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 
 # --- Core Functions ---
 check_root() {
@@ -31,7 +31,6 @@ check_root() {
     fi
 }
 
-# This function uses the official installer for the first-time setup.
 install_singbox_service() {
     echo -e "${YELLOW}▶ 正在准备安装环境...${NC}"
     if ! command -v wget &>/dev/null && ! command -v curl &>/dev/null; then
@@ -54,7 +53,7 @@ do_install() {
     fi
 
     clear
-    echo -e "${BLUE}--- 欢迎使用 Sing-box SOCKS5 终极安装向导 (v3.0) ---${NC}"
+    echo -e "${BLUE}--- 欢迎使用 Sing-box SOCKS5 终极安装向导 (v3.1) ---${NC}"
     
     read -rp "请输入代理端口 [默认: 65000]: " PORT; PORT=${PORT:-"65000"}
     read -rp "请输入代理用户名 [默认: 123123]: " USERNAME; USERNAME=${USERNAME:-"123123"}
@@ -110,73 +109,44 @@ do_uninstall() {
 do_update() {
     get_status_info quiet # Refresh version info without printing
     
-    if [[ -z "$LATEST_VERSION" && -z "$LATEST_PRE_VERSION" ]]; then
-        echo -e "${RED}无法获取最新版本信息，请检查网络！${NC}"
-        sleep 2
-        return
+    if [[ -z "$LATEST_VERSION" ]]; then
+        echo -e "${RED}无法获取最新版本信息，请检查网络！${NC}"; sleep 2; return;
     fi
     
-    echo
-    green "请选择要更新的目标版本:"
-    echo -e "1. 最新正式版: ${YELLOW}${LATEST_VERSION}${NC}"
-    echo -e "2. 最新测试版: ${YELLOW}${LATEST_PRE_VERSION}${NC}"
-    echo "0. 返回菜单"
-    read -rp "请输入数字 [0-2]: " choice
-
-    local target_version=""
-    case $choice in
-        1) target_version=$LATEST_VERSION ;;
-        2) target_version=$LATEST_PRE_VERSION ;;
-        0) return ;;
-        *) echo -e "${RED}无效输入!${NC}"; sleep 1; return ;;
-    esac
-
-    if [[ -z "$target_version" ]]; then
-        echo -e "${RED}无法确定目标版本，操作中止。${NC}"; sleep 2; return;
-    fi
-    
-    if [[ "$CURRENT_VERSION" == "$target_version" ]]; then
-        echo -e "${GREEN}您当前的版本已是所选的最新版本！无需更新。${NC}"; sleep 2; return;
+    if [[ "$CURRENT_VERSION" == "$LATEST_VERSION" ]]; then
+        echo -e "\n${GREEN}您当前的版本已经是最新正式版 (${CURRENT_VERSION})！无需更新。${NC}"; sleep 2; return;
     fi
 
-    echo -e "${YELLOW}▶ 准备更新核心至版本: v${target_version}${NC}"
+    echo -e "\n当前版本: ${YELLOW}${CURRENT_VERSION}${NC}"
+    echo -e "最新正式版: ${GREEN}${LATEST_VERSION}${NC}"
+    read -rp "是否要更新到最新正式版？ (y/n): " choice
+    if [[ ! "$choice" =~ ^[yY]$ ]]; then echo "操作已取消。"; return; fi
+
+    echo -e "${YELLOW}▶ 准备更新核心至版本: v${LATEST_VERSION}${NC}"
     
-    # Detect CPU architecture
-    local cpu_arch
-    case $(uname -m) in
-        armv7l) cpu_arch=armv7;;
-        aarch64) cpu_arch=arm64;;
-        x86_64) cpu_arch=amd64;;
+    local cpu_arch; case $(uname -m) in
+        armv7l) cpu_arch=armv7;; aarch64) cpu_arch=arm64;; x86_64) cpu_arch=amd64;;
         *) echo -e "${RED}不支持的CPU架构: $(uname -m)${NC}"; return ;;
     esac
     
-    local file_name="sing-box-${target_version}-linux-${cpu_arch}"
-    local download_url="https://github.com/SagerNet/sing-box/releases/download/v${target_version}/${file_name}.tar.gz"
+    local file_name="sing-box-${LATEST_VERSION}-linux-${cpu_arch}"
+    local download_url="https://github.com/SagerNet/sing-box/releases/download/v${LATEST_VERSION}/${file_name}.tar.gz"
     
     echo "下载地址: $download_url"
     
     cd /tmp
     wget -q --show-progress -O "${file_name}.tar.gz" "$download_url"
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}下载失败！请检查网络或确认该版本是否存在。${NC}"; rm -f "${file_name}.tar.gz"; return;
-    fi
+    if [ $? -ne 0 ]; then echo -e "${RED}下载失败！${NC}"; rm -f "${file_name}.tar.gz"; return; fi
     
-    tar xzf "${file_name}.tar.gz"
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}解压失败！下载的文件可能已损坏。${NC}"; rm -rf "$file_name" "${file_name}.tar.gz"; return;
-    fi
+    tar xzf "${file_name}.tar.gz"; if [ $? -ne 0 ]; then echo -e "${RED}解压失败！${NC}"; rm -rf "$file_name" "${file_name}.tar.gz"; return; fi
     
     echo -e "${YELLOW}▶ 正在替换核心文件...${NC}"
-    mv -f "${file_name}/sing-box" "$SINGBOX_PATH"
-    chmod +x "$SINGBOX_PATH"
+    mv -f "${file_name}/sing-box" "$SINGBOX_PATH"; chmod +x "$SINGBOX_PATH"
     
-    echo -e "${YELLOW}▶ 清理临时文件...${NC}"
-    rm -rf "$file_name" "${file_name}.tar.gz"
+    echo -e "${YELLOW}▶ 清理临时文件...${NC}"; rm -rf "$file_name" "${file_name}.tar.gz"
     
-    echo -e "${GREEN}✔ 核心更新完成！正在重启服务...${NC}"
-    do_restart
+    echo -e "${GREEN}✔ 核心更新完成！正在重启服务...${NC}"; do_restart
     
-    # Update current version variable for immediate display
     CURRENT_VERSION=$($SINGBOX_PATH version | head -n 1 | awk '{print $2}')
     echo -e "${GREEN}当前新版本为: ${CURRENT_VERSION}${NC}"
 }
@@ -191,10 +161,9 @@ get_status_info() {
     
     CURRENT_VERSION=$($SINGBOX_PATH version 2>/dev/null | head -n 1 | awk '{print $2}')
     
-    # Fetch version info from jsDelivr CDN
     JSDELIVR_DATA=$(curl -s --connect-timeout 3 "https://data.jsdelivr.com/v1/package/gh/SagerNet/sing-box")
-    LATEST_VERSION=$(echo "$JSDELIVR_DATA" | grep -Eo '"[0-9.]+,"' | sed -n 1p | tr -d '",')
-    LATEST_PRE_VERSION=$(echo "$JSDELIVR_DATA" | grep -Eo '"[0-9.]*-[^"]*"' | sed -n 1p | tr -d '",')
+    # Robustly find the latest stable version by sorting
+    LATEST_VERSION=$(echo "$JSDELIVR_DATA" | grep -Eo '"[0-9]+\.[0-9]+\.[0-9]+"' | tr -d '"' | sort -V | tail -n 1)
 
     if [[ "$1" != "quiet" ]]; then
         UPDATE_INFO=""
@@ -218,14 +187,14 @@ show_menu() {
         clear; echo -e "${BLUE}    ╔════════════════════════════════════════════════╗\n    ║     Sing-box SOCKS5 Server Management Panel      ║\n    ╚════════════════════════════════════════════════╝${NC}"; get_status_info
         echo -e "\n  当前状态: ${STATUS_MSG}"
         echo -e "  核心版本: ${YELLOW}${CURRENT_VERSION}${NC} ${UPDATE_INFO}"
-        echo -e "  最新正式版: ${GREEN}${LATEST_VERSION}${NC}  最新测试版: ${YELLOW}${LATEST_PRE_VERSION}${NC}"
+        echo -e "  最新正式版: ${GREEN}${LATEST_VERSION}${NC}"
         echo -e "${CONFIG_INFO}"
-        echo "--------------------------------------------------"
-        echo "  1. 启动服务         2. 停止服务         3. 重启服务"
-        echo "  4. 查看日志         ${YELLOW}6. 更新核心${NC}"
+        echo -e "--------------------------------------------------"
+        echo -e "  1. 启动服务         2. 停止服务         3. 重启服务"
+        echo -e "  4. 查看日志         ${YELLOW}6. 更新核心${NC}"
         echo -e "  ${RED}5. 卸载服务${NC}"
-        echo "  0. 退出脚本"
-        echo "--------------------------------------------------"
+        echo -e "  0. 退出脚本"
+        echo -e "--------------------------------------------------"
         read -rp "请输入数字 [0-6]: " choice
         case $choice in
             1) do_start; echo -e "${GREEN}✔ 服务已启动${NC}"; sleep 1 ;;
